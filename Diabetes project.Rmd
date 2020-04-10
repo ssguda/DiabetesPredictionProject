@@ -1,0 +1,424 @@
+---
+title: "Predicting Diabetes in an African American Population"
+author: "Shravya Guda"
+date: "3/26/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Load libraries and diabetes data: 
+```{r}
+library(faraway)
+library(ggplot2)
+library(ROCR)
+library(rpart)
+library(ResourceSelection)
+data(diabetes) 
+```
+
+#Assign diabetes data to variable df as a dataframe and view preview of dataframe and its columns
+```{r}
+df<- as.data.frame(diabetes)
+head(df)
+```
+
+#Recoding the glyhb variable to binary based on the threshold of 7- if less than or equal to 7, diagnosis is negative, but if over 7, diagnosis is positive. I did this separately in both numerical and character columns while preserving the original glyhb data.  The reason I'm choosing to do both numeric and character data is for downline analysis, I'm not sure which I'll need so it's better to set up both right now.
+
+```{r}
+df$diag_num <- ifelse(df$glyhb > 7 , 1, 0)
+
+df_2 <- df[!is.na(df$diag_num),]
+
+df_2$diag_char <- ifelse(df_2$diag_num == 1, 'positive', 'negative')
+```
+
+#Now, I'll select two variables and create interleaved histograms and scatterplots for each. 
+
+The first variable I will select is age. The reason I am choosing this variable is because I know many middle aged and older people with diagnosed diabetes, so I would like to see if there is a correlation with age and a positive diagnosis. 
+
+```{r}
+agehist <- ggplot(df_2, aes(x = age, fill = diag_char)) + 
+  geom_histogram(position = 'identity', binwidth = 5, alpha = 0.75) +
+  theme_light() + 
+  labs(title= 'Age and Diagnosis Distribution', fill = "Diagnosis")
+
+agehist
+
+```
+Scatterplot for Age. Need to add jitter to see distribution of points better.
+```{r}
+agescatter <- ggplot(df_2, aes(x = age, y=diag_char, color = diag_char)) +
+  geom_jitter() +
+  theme_light() + 
+  labs(title= 'Diagnosis vs Age', y='Diagnosis', x='Age',  color = "Diagnosis")
+
+agescatter
+```
+
+The next variable I'll choose is Stabilized Glucose- stab.glu in this dataset. I'm choosing this variable because I know  that a symptom of diabetes is elevated glucose levels, so my intuition tells me that a variable involving glucose might be a good choice to check out. 
+
+
+
+```{r}
+gluhist <- ggplot(df_2, aes(x = stab.glu, fill = diag_char)) + 
+  geom_histogram(position = 'identity', binwidth = 10, alpha = 0.75) +
+  theme_light() + 
+  labs(x= 'Stabilized Glucose', title= 'Stabilized Glucose and Diagnosis Distribution', fill = "Diagnosis")
+
+gluhist
+
+min(df_2$stab.glu)
+```
+```{r}
+gluscatter <- ggplot(df_2, aes(x = stab.glu, y=diag_char, color = diag_char)) +
+  geom_jitter() +
+  theme_light() + 
+  labs(title= 'Diagnosis vs Stabilized Glucose', y='Diagnosis', x='Stabilized Glucose',  color = "Diagnosis")
+
+gluscatter
+```
+
+
+Step 2: Using step() to figure out best predictor combination 
+
+First I will convert ther response to a factor and fit the full model with diag_num as response: 
+
+```{r}
+df_2$diag_num <- as.factor(df_2$diag_num)
+mod.full<-  glm(diag_num ~ ., family = binomial, data = df_2)
+
+```
+
+This model did not converge. I believe the reason it did not converge is because of the NA values in blood pressure variables bp.2s and bp.2d, so I will remove the NA values.
+
+```{r}
+df3<- na.omit(df_2)
+mod.full<-  glm(diag_num ~ ., family = binomial, data = df3)
+
+```
+This model still did not converge.  I will get rid of the ratio and glyhb variables since they are already incorporated in the models via the diag_num, diag_char, and chol/hdl variables. We also don't need patient ID so I'll get rid of that as well, as well as time.ppn which is the time at which the lab was drawn.Also,I'll remove the columns bp.2s and bp.2d entirely from the dataframe because they are still causing convergence problems as well.
+
+```{r}
+
+df3 <- df_2[ ,c(2:4,7:14, 17:18, 20:21)] 
+df3 <- na.omit(df3)
+df3$diag_num<- as.factor(df3$diag_num)
+str(df3)
+
+
+```
+
+```{r}
+df3$diag_num<- as.factor(df3$diag_num)
+
+mod.full<-  glm(diag_num ~ ., family = binomial, data = df3, maxit=200)
+
+summary(mod.full)
+```
+
+Clearly these results are weird so I'm going to use step() to see what parameters are ideal. 
+
+```{r}
+mod_aic<- step(mod.full)
+
+```
+
+```{r}
+formula(mod_aic)
+
+```
+
+The diag_char variable should be removed because I believe it's skewing the results of the AIC selection, since it's coded from the response itself. 
+
+```{r}
+mod.full2<- glm(diag_num ~ chol+stab.glu+hdl+age+gender+location+height+weight+frame+bp.1s+bp.1d+waist+hip, family = binomial, data = df3)
+summary(mod.full2)
+```
+
+Right so this makes more sense in terms of p-values so I'll consider this as the full model and restart the AIC process
+
+```{r}
+
+mod_aic2<- step(mod.full2)
+```
+
+Let's see the formula:
+
+```{r}
+formula(mod_aic2)
+
+```
+
+```{r}
+mod.reduced<- glm(diag_num~chol + stab.glu + age + waist, family=binomial, data=df3)
+summary(mod.reduced)
+
+```
+
+
+I'm a little on the fence about the variables that are do not have a significant p-value at 95%. Let's see what happens when they are removed.
+
+```{r}
+mod.reduced2<- glm(diag_num~age+stab.glu, family=binomial, data=df3)
+summary(mod.reduced2)
+
+```
+
+When they are removed, the AIC increases for the entire model. This indicates to me that the other variables are necessary to make a better performing model, so I will keep them in the model. 
+
+Week 3: Assess Model Fit 
+Final model: diag_num~age+stab.glu+chol+waist
+
+Change stab.glu to numeric
+```{r}
+df3$stab.glu <- as.numeric(df3$stab.glu)
+str(df3)
+```
+
+```{r}
+df_4 <- df3
+df_4$diag_num <- as.integer(df_4$diag_num)
+df_4$chol <- as.numeric(df_4$chol)
+df_4$diag_num <- ifelse(df_4$diag_num == 1, 0, 1)
+str(df_4)
+```
+
+Loess plot for 'stab.glu'.  First find smoothed y values, then find the values where the smoothed y values are less than zero or greater than one, and then plot values where y is in the interval (0,1)
+```{r}
+ybar <- predict(loess(diag_num ~ stab.glu, data = df_4))
+ybarint <- which(ybar>0 & ybar<1)
+plot(jitter(df_4$stab.glu)[ybarint], log(ybar[ybarint]/(1-ybar[ybarint])))
+```
+
+This is not linear :( 
+
+Same process for chol
+```{r}
+ybar2 <- predict(loess(diag_num ~ chol, data = df_4))
+ybarint2 <- which(ybar2>0 & ybar2<1)
+plot(jitter(df_4$chol)[ybarint2], log(ybar2[ybarint2]/(1-ybar2[ybarint2])))
+```
+Same process for age 
+```{r}
+ybar3 <- predict(loess(diag_num ~ age, data = df_4))
+ybarint3 <- which(ybar3>0 & ybar3<1)
+plot(jitter(df_4$age)[ybarint3], log(ybar3[ybarint3]/(1-ybar3[ybarint3])))
+```
+Same process for waist
+```{r}
+ybar4 <- predict(loess(diag_num ~ waist, data = df_4))
+ybarint4 <- which(ybar4>0 & ybar4<1)
+plot(jitter(df_4$waist)[ybarint4], log(ybar4[ybarint4]/(1-ybar4[ybarint4])))
+```
+
+None of these are linear how sad :(  Will need to create splines 
+
+
+Write function to create splines 
+```{r}
+
+##function to create splines, x is predictor, k is vector of knots. Can only do k=3 knots
+my.4splines <- function(x,k){
+  k1 <- k[1]
+  k2 <- k[2]
+  k3 <- k[3]
+  x.l1 <- NULL
+  x.l2 <- NULL
+  x.l3 <- NULL
+  x.l4 <- NULL
+  for (i in 1:length(x)){
+    x.l1[i] <- min(x[i],k1)
+    x.l2[i] <- max(min(x[i],k2),k1)-k1
+    x.l3[i] <- max(min(x[i],k3),k2)-k2
+    x.l4[i] <- max(x[i],k3)-k3
+  }
+  x.s <- cbind(x.l1,x.l2,x.l3,x.l4)
+}
+
+```
+
+```{r}
+
+#Spline knots are located at the 10th, 50th, and 90th percentiles
+knots_2 <- quantile(df3$stab.glu,c(.10,.50,.90))
+knots_4 <- quantile(df3$age,c(.10,.50,.90))
+knots_6 <- quantile(df3$chol,c(.10,.50,.90))
+knots_8 <- quantile(df3$waist,c(.10,.50,.90))
+
+#Run splines on all variables
+stab.glu_spline <- my.4splines(df3$stab.glu,knots_2)
+age_spline <- my.4splines(df3$age,knots_4)
+chol_spline <- my.4splines(df3$chol,knots_2)
+waist_spline <- my.4splines(df3$waist,knots_4)
+```
+Fit spline model
+```{r}
+
+mod.spline <- glm(diag_num~stab.glu_spline + age_spline+waist_spline+chol_spline,family=binomial, data=df3)
+
+summary(mod.spline)
+```
+
+The above model yielded the error: fitted probabilities numerically 0 or 1 occurred.  This indicates that the spline is overfit so I will test each variable individually. 
+
+```{r}
+
+spline_stab.glu <- glm(diag_num~stab.glu_spline,family=binomial, data=df3)
+
+summary(spline_stab.glu)
+```
+
+```{r}
+spline_waist<- glm(diag_num~waist_spline,family=binomial, data=df3)
+
+summary(spline_waist)
+```
+
+```{r}
+spline_chol<- glm(diag_num~chol_spline,family=binomial, data=df3)
+
+summary(spline_chol)
+```
+
+```{r}
+spline_age<- glm(diag_num~age_spline,family=binomial, data=df3)
+
+summary(spline_age)
+```
+
+Age is the only variable that returns the error.  Therefore I will remove it from the model and run the hosmer-lemeshow test 
+
+```{r}
+mod.spline2<- glm(diag_num~ waist_spline+chol_spline+stab.glu_spline,family=binomial, data=df3)
+
+summary(mod.spline2)
+
+```
+
+```{r}
+hoslem.test(df_4$diag_num, mod.spline2$fitted.values)
+```
+
+Ho: model is adequate
+Ha: Model is not adequate
+
+
+The resulting p-value from the HL test was 0.71 which is very large. We fail to reject the null hypothesis, therefore this model is adequate. 
+
+
+
+Step 4: Report p-values and confidence intervals for significant predictors and check for
+influential observations. Any influential observations should be removed and the model
+should be refit. Note any changes in the inferences due to the removal.
+
+
+Influential observations are found using cook's distance, so I'll set up the following plot: 
+
+```{r}
+plot(mod.spline2, which = 4, id.n = 5)
+
+```
+The plot indicates that observations 48, 148, 195, 257, and 313 are influential and therefore might be skewing the results.  I'll remove them from the dataset using indexing in R.
+
+```{r}
+df3.1 <- df3[-c(48, 148, 195, 257, 313),]
+
+```
+
+
+Now that the influential observations have been removed, the data will need to be remodeled. I'll still use the splines since removing these observations likely won't change the linearity of the response with the logit. 
+
+```{r}
+
+#Spline knots are located at the 10th, 50th, and 90th percentiles
+knots_2.1 <- quantile(df3.1$stab.glu,c(.10,.50,.90))
+knots_4.1 <- quantile(df3.1$age,c(.10,.50,.90))
+knots_6.1 <- quantile(df3.1$chol,c(.10,.50,.90))
+knots_8.1 <- quantile(df3.1$waist,c(.10,.50,.90))
+
+#Run splines on all variables
+stab.glu_spline.1 <- my.4splines(df3.1$stab.glu,knots_2.1)
+age_spline.1 <- my.4splines(df3.1$age,knots_4.1)
+chol_spline.1 <- my.4splines(df3.1$chol,knots_2.1)
+waist_spline.1 <- my.4splines(df3.1$waist,knots_4.1)
+```
+Set up new df for hoslem test without the influential observations 
+```{r}
+df_4.1 <- df3.1
+df_4.1$diag_num <- as.integer(df_4.1$diag_num)
+df_4.1$chol <- as.numeric(df_4.1$chol)
+df_4.1$diag_num <- ifelse(df_4.1$diag_num == 1, 0, 1)
+str(df_4.1)
+```
+
+
+```{r}
+mod.spline2.1<- glm(diag_num~ waist_spline.1+chol_spline.1+stab.glu_spline.1,family=binomial, data=df3.1)
+
+summary(mod.spline2.1)
+
+```
+
+```{r}
+hoslem.test(df_4.1$diag_num, mod.spline2.1$fitted.values)
+
+
+```
+Hosmer-lemeshow test still indicates a large p value, so there is no evidence that the model is inadequate. The AIC is also smaller than the previous model with the influential observations.
+
+
+Aggregate the influential observations in a separate df: 
+
+```{r}
+df3.2 <- df3[c(48, 148, 195, 257, 313),]
+df3.2
+```
+
+Calculate confidence intervals for significant predictors (p<0.05)
+
+
+stab.glu_spline.1x.l3  is the only predictor with p value that is significant.  Calculate 90% confidence intervals: 
+
+```{r}
+
+
+ 5.492e-02  + (qnorm(.90+0.05,0,1))*9.489e-03
+ 5.492e-02  - (qnorm(.90+0.05,0,1))*9.489e-03
+
+```
+Part 5: Model Performance
+
+Create ROC Curve for this model 
+
+```{r}
+pred <- prediction(mod.spline2.1$fitted.values, df_4.1$diag_num)
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+plot(perf, col = rainbow(10))
+
+auc.tmp <- performance(pred, "auc");
+auc <- as.numeric(auc.tmp@y.values)
+auc
+
+```
+
+
+Create predicted value frequency plots: 
+```{r}
+hist(mod.spline2.1$fitted.values[df_4.1$diag_num==0], main="Negative Diagnoses")
+
+```
+```{r}
+hist(mod.spline2.1$fitted.values[df_4.1$diag_num==1], main="Positive Diagnoses")
+
+```
+
+
+Create jitter plot of fitted values as predicted to see p hats
+```{r}
+plot(mod.spline2.1$fitted.values, jitter(as.numeric(df_4.1$diag_num), factor=0.1))
+
+
+```
